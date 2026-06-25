@@ -1,0 +1,207 @@
+export const consumerAbi = [
+  {
+    type: 'constructor',
+    inputs: [],
+    stateMutability: 'nonpayable',
+  },
+  {
+    type: 'function',
+    name: 'owner',
+    inputs: [],
+    outputs: [{ name: '', type: 'address' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'activeScheduleId',
+    inputs: [],
+    outputs: [{ name: '', type: 'uint256' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'scheduledImageCount',
+    inputs: [],
+    outputs: [{ name: '', type: 'uint256' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'lastScheduledExecution',
+    inputs: [],
+    outputs: [{ name: '', type: 'uint256' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'scheduleBasePrompt',
+    inputs: [],
+    outputs: [{ name: '', type: 'string' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'getRequestCount',
+    inputs: [],
+    outputs: [{ name: '', type: 'uint256' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'getRequest',
+    inputs: [{ name: 'jobId', type: 'bytes32' }],
+    outputs: [
+      {
+        type: 'tuple',
+        components: [
+          { name: 'user', type: 'address' },
+          { name: 'prompt', type: 'string' },
+          { name: 'uri', type: 'string' },
+          { name: 'contentHash', type: 'bytes32' },
+          { name: 'fulfilled', type: 'bool' },
+          { name: 'failed', type: 'bool' },
+          { name: 'errorMessage', type: 'string' },
+        ],
+      },
+    ],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'getRegisteredKey',
+    inputs: [{ name: 'user', type: 'address' }],
+    outputs: [
+      { name: 'x', type: 'bytes32' },
+      { name: 'y', type: 'bytes32' },
+    ],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'registerKey',
+    inputs: [
+      { name: 'x', type: 'bytes32' },
+      { name: 'y', type: 'bytes32' },
+    ],
+    outputs: [],
+    stateMutability: 'nonpayable',
+  },
+  {
+    type: 'function',
+    name: 'depositFees',
+    inputs: [{ name: 'lockDuration', type: 'uint256' }],
+    outputs: [],
+    stateMutability: 'payable',
+  },
+  {
+    type: 'function',
+    name: 'requestImage',
+    inputs: [
+      { name: 'executor', type: 'address' },
+      { name: 'ttl', type: 'uint256' },
+      { name: 'prompt', type: 'string' },
+      { name: 'model', type: 'string' },
+      { name: 'width', type: 'uint32' },
+      { name: 'height', type: 'uint32' },
+      {
+        name: 'outputStorageRef',
+        type: 'tuple',
+        components: [
+          { name: 'platform', type: 'string' },
+          { name: 'path', type: 'string' },
+          { name: 'keyRef', type: 'string' },
+        ],
+      },
+      { name: 'encryptedSecrets', type: 'bytes[]' },
+    ],
+    outputs: [{ name: '', type: 'bytes32' }],
+    stateMutability: 'nonpayable',
+  },
+  {
+    type: 'function',
+    name: 'scheduleAutomaticImage',
+    inputs: [
+      { name: 'basePrompt', type: 'string' },
+      { name: 'gasLimit', type: 'uint32' },
+      { name: 'maxFeePerGas', type: 'uint256' },
+      { name: 'numCalls', type: 'uint32' },
+    ],
+    outputs: [],
+    stateMutability: 'nonpayable',
+  },
+  {
+    type: 'function',
+    name: 'cancelAutomaticSchedule',
+    inputs: [],
+    outputs: [],
+    stateMutability: 'nonpayable',
+  },
+  {
+    type: 'function',
+    name: 'setScheduleBasePrompt',
+    inputs: [{ name: 'basePrompt', type: 'string' }],
+    outputs: [],
+    stateMutability: 'nonpayable',
+  },
+  {
+    type: 'event',
+    name: 'KeyRegistered',
+    inputs: [
+      { name: 'user', type: 'address', indexed: true },
+      { name: 'x', type: 'bytes32', indexed: true },
+      { name: 'y', type: 'bytes32', indexed: true },
+    ],
+  },
+  {
+    type: 'event',
+    name: 'ImageRequested',
+    inputs: [
+      { name: 'jobId', type: 'bytes32', indexed: true },
+      { name: 'user', type: 'address', indexed: true },
+      { name: 'prompt', type: 'string', indexed: false },
+    ],
+  },
+  {
+    type: 'event',
+    name: 'ImageReady',
+    inputs: [
+      { name: 'jobId', type: 'bytes32', indexed: true },
+      { name: 'user', type: 'address', indexed: true },
+      { name: 'uri', type: 'string', indexed: false },
+    ],
+  },
+  {
+    type: 'event',
+    name: 'ImageFailed',
+    inputs: [
+      { name: 'jobId', type: 'bytes32', indexed: true },
+      { name: 'error', type: 'string', indexed: false },
+    ],
+  },
+  {
+    type: 'event',
+    name: 'AutoScheduleSet',
+    inputs: [
+      { name: 'callId', type: 'uint256', indexed: true },
+      { name: 'frequency', type: 'uint256', indexed: false },
+      { name: 'numCalls', type: 'uint256', indexed: false },
+      { name: 'basePrompt', type: 'string', indexed: false },
+    ],
+  },
+  {
+    type: 'event',
+    name: 'AutoScheduleCancelled',
+    inputs: [
+      { name: 'callId', type: 'uint256', indexed: true },
+    ],
+  },
+  {
+    type: 'event',
+    name: 'ScheduledImageCreated',
+    inputs: [
+      { name: 'executionIndex', type: 'uint256', indexed: true },
+      { name: 'jobId', type: 'bytes32', indexed: true },
+      { name: 'prompt', type: 'string', indexed: false },
+    ],
+  },
+] as const;
