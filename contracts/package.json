@@ -1,0 +1,7 @@
+{
+  "name": "passkey-image-contracts",
+  "private": true,
+  "dependencies": {
+    "eciesjs": "^0.4.0"
+  }
+}

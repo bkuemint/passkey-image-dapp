@@ -3,6 +3,7 @@ pragma solidity ^0.8.20;
 
 interface IRitualWallet {
     function deposit(uint256 lockDuration) external payable;
+    function depositFor(address to, uint256 lockDuration) external payable;
     function balanceOf(address user) external view returns (uint256);
 }
 
@@ -24,12 +25,17 @@ interface IScheduler {
     function cancel(uint256 callId) external;
 }
 
+enum SovereignWakeMode { NONE, ROLLING_FIXED_WINDOW }
+enum SovereignExecutorMode { PINNED, RESOLVE_AT_INVOCATION }
+
 contract PasskeyImageConsumer {
     address constant IMAGE_PRECOMPILE = 0x0000000000000000000000000000000000000818;
     address constant RITUAL_WALLET    = 0x532F0dF0896F353d8C3DD8cc134e8129DA2a3948;
     address constant ASYNC_DELIVERY   = 0x5A16214fF555848411544b005f7Ac063742f39F6;
     address constant SECP256R1        = 0x0000000000000000000000000000000000000100;
     address constant SCHEDULER        = 0x56e776BAE2DD60664b69Bd5F865F1180ffB7D58B;
+    address constant SOVEREIGN_AGENT_PRECOMPILE = 0x000000000000000000000000000000000000080C;
+    address constant TEE_REGISTRY                = 0x9644e8562cE0Fe12b4deeC4163c064A8862Bf47F;
 
     struct P256Key {
         bytes32 x;
@@ -55,6 +61,32 @@ contract PasskeyImageConsumer {
     uint256 public scheduledImageCount;
     uint256 public lastScheduledExecution;
     string public scheduleBasePrompt;
+    StorageRef public scheduleOutputRef;
+
+    bool public configured;
+    SovereignWakeMode public wakeMode;
+    SovereignExecutorMode public executorMode;
+    uint256 public activeCallId;
+    uint32 public activeNumCalls;
+    uint64 public currentSeriesId;
+    uint64 public pendingSeriesId;
+    uint64 public nextSeriesId;
+    uint256 public pendingCallId;
+    uint32 public thresholdIndex;
+    bool public hasStartConfig;
+    SovereignAgentParams internal params;
+    bytes internal sovereignInputTemplate;
+    SovereignScheduleConfig public scheduleConfig;
+    SovereignRollingConfig public rollingConfig;
+    uint256 private _launchStatus;
+    uint256 private constant _NOT_ENTERED = 1;
+    uint256 private constant _ENTERED = 2;
+
+    error AlreadyRunning();
+    error NotConfigured();
+    error SovereignCallFailed();
+    error NoValidExecutor();
+    error InvalidWakeMode();
 
     event KeyRegistered(address indexed user, bytes32 x, bytes32 y);
     event ImageRequested(bytes32 indexed jobId, address indexed user, string prompt);
@@ -63,6 +95,12 @@ contract PasskeyImageConsumer {
     event AutoScheduleSet(uint256 indexed callId, uint256 frequency, uint256 numCalls, string basePrompt);
     event AutoScheduleCancelled(uint256 indexed callId);
     event ScheduledImageCreated(uint256 indexed executionIndex, bytes32 indexed jobId, string prompt);
+    event SovereignConfigured(address indexed owner);
+    event SovereignStarted(uint256 indexed callId, uint32 numCalls, uint32 frequency);
+    event SovereignStopped();
+    event SovereignInvoked(uint256 indexed executionIndex, uint64 indexed seriesId, bytes output);
+    event SovereignResult(bytes32 indexed jobId, bytes result);
+    event SovereignRestarted(uint256 indexed callId);
 
     modifier onlyOwner() {
         require(msg.sender == owner, "Not owner");
@@ -81,6 +119,7 @@ contract PasskeyImageConsumer {
 
     constructor() {
         owner = msg.sender;
+        scheduleOutputRef = StorageRef("hf", "", "");
     }
 
     receive() external payable {}
@@ -143,6 +182,53 @@ contract PasskeyImageConsumer {
         string keyRef;
     }
 
+    struct SovereignStorageRef {
+        string platform;
+        string path;
+        string keyRef;
+    }
+
+    struct SovereignAgentParams {
+        address executor;
+        uint256 ttl;
+        bytes userPublicKey;
+        uint64 pollIntervalBlocks;
+        uint64 maxPollBlock;
+        string taskIdMarker;
+        address deliveryTarget;
+        bytes4 deliverySelector;
+        uint256 deliveryGasLimit;
+        uint256 deliveryMaxFeePerGas;
+        uint256 deliveryMaxPriorityFeePerGas;
+        uint16 agentType;
+        string prompt;
+        bytes encryptedSecrets;
+        SovereignStorageRef convoHistory;
+        SovereignStorageRef output;
+        SovereignStorageRef[] skills;
+        SovereignStorageRef systemPrompt;
+        string model;
+        string[] tools;
+        uint16 maxTurns;
+        uint32 maxTokens;
+        string rpcUrls;
+    }
+
+    struct SovereignScheduleConfig {
+        uint32 schedulerGas;
+        uint32 frequency;
+        uint32 schedulerTtl;
+        uint256 maxFeePerGas;
+        uint256 maxPriorityFeePerGas;
+        uint256 value;
+    }
+
+    struct SovereignRollingConfig {
+        uint32 windowNumCalls;
+        uint16 rolloverThresholdBps;
+        uint16 rolloverRetryEveryCalls;
+    }
+
     function _buildModalInput(string memory prompt) internal pure returns (ModalInput[] memory) {
         ModalInput[] memory inputs = new ModalInput[](1);
         inputs[0] = ModalInput({
@@ -170,27 +256,6 @@ contract PasskeyImageConsumer {
             fps: 0,
             negativePrompt: ""
         });
-    }
-
-    struct PrecompileInput {
-        address executor;
-        bytes[] encryptedSecrets;
-        uint256 ttl;
-        bytes[] allowedQueueIdx;
-        bytes allowedDelegate;
-        uint64 gas;
-        uint64 value;
-        string taskId;
-        address revertAddress;
-        bytes4 callbackSelector;
-        uint256 callbackGasLimit;
-        uint256 feeMaxGas;
-        uint256 feeMaxGasPrice;
-        uint256 feeToken;
-        string model;
-        ModalInput[] inputs;
-        OutputConfig output;
-        StorageRef outputStorageRef;
     }
 
     function _callImagePrecompile(
@@ -225,6 +290,27 @@ contract PasskeyImageConsumer {
         (bool ok, bytes memory result) = IMAGE_PRECOMPILE.call(abi.encode(pi));
         require(ok, "Image precompile call failed");
         return result;
+    }
+
+    struct PrecompileInput {
+        address executor;
+        bytes[] encryptedSecrets;
+        uint256 ttl;
+        bytes[] allowedQueueIdx;
+        bytes allowedDelegate;
+        uint64 gas;
+        uint64 value;
+        string taskId;
+        address revertAddress;
+        bytes4 callbackSelector;
+        uint256 callbackGasLimit;
+        uint256 feeMaxGas;
+        uint256 feeMaxGasPrice;
+        uint256 feeToken;
+        string model;
+        ModalInput[] inputs;
+        OutputConfig output;
+        StorageRef outputStorageRef;
     }
 
     function requestImage(
@@ -371,7 +457,7 @@ contract PasskeyImageConsumer {
 
         ModalInput[] memory inputs = _buildModalInput(prompt);
         OutputConfig memory output = _buildOutputConfig(1024, 1024);
-        StorageRef memory storageRef = StorageRef("gcs", "passkey-image-dapp-outputs", "");
+        StorageRef memory storageRef = scheduleOutputRef;
 
         bytes[] memory emptySecrets = new bytes[](0);
         bytes memory result = _callImagePrecompile(
@@ -401,6 +487,10 @@ contract PasskeyImageConsumer {
         emit ScheduledImageCreated(executionIndex, jobId, prompt);
     }
 
+    function setScheduleOutputStorage(StorageRef calldata ref) external onlyOwner {
+        scheduleOutputRef = ref;
+    }
+
     function cancelAutomaticSchedule() external onlyOwner {
         require(activeScheduleId != 0, "No active schedule");
         IScheduler(SCHEDULER).cancel(activeScheduleId);
@@ -410,5 +500,158 @@ contract PasskeyImageConsumer {
 
     function setScheduleBasePrompt(string calldata basePrompt) external onlyOwner {
         scheduleBasePrompt = basePrompt;
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  Sovereign Agent (0x080C) Lifecycle
+    // ═══════════════════════════════════════════════════════════════
+
+    function configureFundAndStart(
+        SovereignAgentParams calldata p,
+        SovereignScheduleConfig calldata s,
+        SovereignRollingConfig calldata r,
+        uint256 lockDuration
+    ) external payable onlyOwner returns (uint256 callId) {
+        _configure(p, s, r);
+        if (msg.value > 0) {
+            IRitualWallet(RITUAL_WALLET).depositFor{value: msg.value}(address(this), lockDuration);
+        }
+        return _armRollingWindow(r.windowNumCalls);
+    }
+
+    function _configure(
+        SovereignAgentParams calldata p,
+        SovereignScheduleConfig calldata s,
+        SovereignRollingConfig calldata r
+    ) internal {
+        if (wakeMode != SovereignWakeMode.NONE) revert AlreadyRunning();
+        params = p;
+        scheduleConfig = s;
+        rollingConfig = r;
+        wakeMode = SovereignWakeMode.ROLLING_FIXED_WINDOW;
+        configured = true;
+        hasStartConfig = true;
+        thresholdIndex = _computeThresholdIndex(r.windowNumCalls, r.rolloverThresholdBps);
+        emit SovereignConfigured(owner);
+    }
+
+    function _armRollingWindow(uint32 numCalls) internal returns (uint256 callId) {
+        bytes memory data = abi.encodeWithSelector(
+            this.wakeUp.selector,
+            uint256(0),
+            uint64(0)
+        );
+        callId = IScheduler(SCHEDULER).schedule(
+            data,
+            scheduleConfig.schedulerGas,
+            uint32(block.number) + 1,
+            numCalls,
+            scheduleConfig.frequency,
+            scheduleConfig.schedulerTtl,
+            scheduleConfig.maxFeePerGas,
+            scheduleConfig.maxPriorityFeePerGas,
+            scheduleConfig.value,
+            address(this),
+            address(this)
+        );
+        activeCallId = callId;
+        activeNumCalls = numCalls;
+        currentSeriesId = nextSeriesId++;
+        emit SovereignStarted(callId, numCalls, scheduleConfig.frequency);
+    }
+
+    function _callSovereignPrecompile(uint256 executionIndex, uint64 seriesId) internal {
+        bytes memory input = getSovereignAgentInput();
+        (bool ok, bytes memory output) = SOVEREIGN_AGENT_PRECOMPILE.call(input);
+        if (!ok) revert SovereignCallFailed();
+        emit SovereignInvoked(executionIndex, seriesId, output);
+    }
+
+    function getSovereignAgentInput() internal view returns (bytes memory) {
+        return abi.encode(params);
+    }
+
+    function wakeUp(uint256 executionIndex, uint64 seriesId) external onlyScheduler {
+        if (wakeMode == SovereignWakeMode.NONE) return;
+
+        if (seriesId == pendingSeriesId && pendingCallId != 0) {
+            activeCallId = pendingCallId;
+            activeNumCalls = rollingConfig.windowNumCalls;
+            currentSeriesId = pendingSeriesId;
+            pendingCallId = 0;
+            pendingSeriesId = 0;
+        }
+
+        if (seriesId != currentSeriesId) return;
+
+        if (pendingCallId == 0 && executionIndex >= thresholdIndex) {
+            _tryScheduleSuccessor();
+        }
+
+        _callSovereignPrecompile(executionIndex, seriesId);
+    }
+
+    function _tryScheduleSuccessor() internal {
+        uint64 successorSeriesId = nextSeriesId++;
+        uint256 successorCallId = IScheduler(SCHEDULER).schedule(
+            abi.encodeWithSelector(this.wakeUp.selector, uint256(0), successorSeriesId),
+            scheduleConfig.schedulerGas,
+            uint32(block.number) + 1,
+            rollingConfig.windowNumCalls,
+            scheduleConfig.frequency,
+            scheduleConfig.schedulerTtl,
+            scheduleConfig.maxFeePerGas,
+            scheduleConfig.maxPriorityFeePerGas,
+            scheduleConfig.value,
+            address(this),
+            address(this)
+        );
+        pendingCallId = successorCallId;
+        pendingSeriesId = successorSeriesId;
+    }
+
+    function _tryCancelRetiredCall() internal {
+        uint256 retiredCallId = activeCallId;
+        if (retiredCallId != 0) {
+            IScheduler(SCHEDULER).cancel(retiredCallId);
+        }
+    }
+
+    function _computeThresholdIndex(uint32 numCalls, uint16 thresholdBps) internal pure returns (uint32) {
+        uint256 thresholdCount = (uint256(numCalls) * uint256(thresholdBps) + 9999) / 10000;
+        if (thresholdCount == 0) thresholdCount = 1;
+        return uint32(thresholdCount - 1);
+    }
+
+    function _stop() internal {
+        if (activeCallId != 0) {
+            IScheduler(SCHEDULER).cancel(uint256(activeCallId));
+            activeCallId = 0;
+        }
+        if (pendingCallId != 0) {
+            IScheduler(SCHEDULER).cancel(uint256(pendingCallId));
+            pendingCallId = 0;
+        }
+        wakeMode = SovereignWakeMode.NONE;
+    }
+
+    function stop() external onlyOwner {
+        if (wakeMode == SovereignWakeMode.NONE) return;
+        _stop();
+        emit SovereignStopped();
+    }
+
+    function restart() external onlyOwner returns (uint256 callId) {
+        if (!hasStartConfig) revert NotConfigured();
+        if (wakeMode != SovereignWakeMode.NONE) {
+            _stop();
+        }
+        wakeMode = SovereignWakeMode.ROLLING_FIXED_WINDOW;
+        callId = _armRollingWindow(rollingConfig.windowNumCalls);
+        emit SovereignRestarted(callId);
+    }
+
+    function onSovereignAgentResult(bytes32 jobId, bytes calldata result) external onlyAsyncDelivery {
+        emit SovereignResult(jobId, result);
     }
 }

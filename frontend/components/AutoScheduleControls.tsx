@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { createPublicClient, createWalletClient, http, custom } from 'viem';
+import { createPublicClient, http } from 'viem';
 import { ritualChain } from '@/lib/chain';
 import { consumerAbi } from '@/lib/contract';
 
@@ -17,53 +17,51 @@ export default function AutoScheduleControls() {
   const [sending, setSending] = useState(false);
 
   const refreshState = useCallback(async () => {
-    if (typeof window === 'undefined' || !window.ethereum) return;
     try {
       const publicClient = createPublicClient({ chain: ritualChain, transport: http() });
 
-      const [signer] = await createWalletClient({
-        chain: ritualChain,
-        transport: custom(window.ethereum!),
-      }).requestAddresses();
-
-      const owner = await publicClient.readContract({
-        address: CONSUMER_ADDRESS,
-        abi: consumerAbi,
-        functionName: 'owner',
-      }) as string;
-
-      setOwnerAddr(owner);
-      setIsOwner(signer.toLowerCase() === owner.toLowerCase());
-
-      const [id, count, last] = await Promise.all([
+      const [owner, id, count, last] = await Promise.all([
+        publicClient.readContract({ address: CONSUMER_ADDRESS, abi: consumerAbi, functionName: 'owner' }) as Promise<string>,
         publicClient.readContract({ address: CONSUMER_ADDRESS, abi: consumerAbi, functionName: 'activeScheduleId' }),
         publicClient.readContract({ address: CONSUMER_ADDRESS, abi: consumerAbi, functionName: 'scheduledImageCount' }),
         publicClient.readContract({ address: CONSUMER_ADDRESS, abi: consumerAbi, functionName: 'lastScheduledExecution' }),
       ]);
+
+      setOwnerAddr(owner);
       setActiveId(id as bigint);
       setImageCount(count as bigint);
       setLastExec(last as bigint);
+
+      const signerRes = await fetch('/api/owner-action');
+      if (signerRes.ok) {
+        const { signer } = await signerRes.json();
+        setIsOwner(signer.toLowerCase() === owner.toLowerCase());
+      }
     } catch { /* ignore */ }
   }, []);
 
   useEffect(() => { refreshState(); }, [refreshState]);
 
   const handleStart = async () => {
-    if (!window.ethereum) return;
     setSending(true);
     try {
-      const walletClient = createWalletClient({ chain: ritualChain, transport: custom(window.ethereum!) });
-      const [signer] = await walletClient.requestAddresses();
       const publicClient = createPublicClient({ chain: ritualChain, transport: http() });
       const gasPrice = await publicClient.getGasPrice();
 
-      await walletClient.writeContract({
-        account: signer,
-        address: CONSUMER_ADDRESS,
-        abi: consumerAbi,
-        functionName: 'scheduleAutomaticImage',
-        args: [basePrompt, 500_000, gasPrice, 730],
+      const res = await fetch('/api/owner-action', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          functionName: 'scheduleAutomaticImage',
+          args: [basePrompt, 500_000, gasPrice.toString(), 730],
+        }),
       });
+
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || 'Start failed');
+      }
+
       await refreshState();
     } catch (err) {
       alert(`Start failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -73,18 +71,22 @@ export default function AutoScheduleControls() {
   };
 
   const handleStop = async () => {
-    if (!window.ethereum) return;
     setSending(true);
     try {
-      const walletClient = createWalletClient({ chain: ritualChain, transport: custom(window.ethereum!) });
-      const [signer] = await walletClient.requestAddresses();
-      await walletClient.writeContract({
-        account: signer,
-        address: CONSUMER_ADDRESS,
-        abi: consumerAbi,
-        functionName: 'cancelAutomaticSchedule',
-        args: [],
+      const res = await fetch('/api/owner-action', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          functionName: 'cancelAutomaticSchedule',
+          args: [],
+        }),
       });
+
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || 'Stop failed');
+      }
+
       await refreshState();
     } catch (err) {
       alert(`Stop failed: ${err instanceof Error ? err.message : String(err)}`);

@@ -4,6 +4,10 @@ out = "out"
 libs = ["lib"]
 via_ir = true
 evm_version = "cancun"
+optimizer = true
+optimizer_runs = 200
+ffi = true
+fs_permissions = [{ access = "read", path = "./script/encrypted-secret.hex" }]
 
 [rpc_endpoints]
 ritual = "https://rpc.ritualfoundation.org"

@@ -77,5 +77,15 @@ function convertStorageUri(uri: string): string {
   if (uri.startsWith('gs://')) {
     return uri.replace('gs://', 'https://storage.googleapis.com/');
   }
+  if (uri.startsWith('hf://')) {
+    const path = uri.slice(5);
+    const parts = path.split('/');
+    if (parts.length >= 2) {
+      const repo = parts.slice(0, 2).join('/');
+      const filePath = parts.slice(2).join('/');
+      return `https://huggingface.co/${repo}/resolve/main/${filePath}`;
+    }
+    return `https://huggingface.co/${path}`;
+  }
   return uri;
 }

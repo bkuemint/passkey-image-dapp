@@ -1,1 +1,2 @@
 .env
+script/encrypted-secret.hex

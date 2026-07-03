@@ -72,9 +72,12 @@ passkey-image-dapp/
 │   ├── test/
 │   │   └── PasskeyImageConsumer.t.sol  ← Foundry tests
 │   └── script/
-│       └── Deploy.s.sol          ← deploy script
-│
-└── frontend/
+    │       ├── Deploy.s.sol          ← deploy script
+    │       ├── Activate.s.sol        ← activate sovereign agent
+    │       ├── encrypt-secret.cjs    ← ECIES encrypt helper (via ffi, Windows-unsafe)
+    │       └── prepare-secret.cjs    ← ECIES encrypt + write hex file (offline, Windows-safe)
+    │
+    └── frontend/
     ├── package.json
     ├── tsconfig.json
     ├── next.config.js
@@ -133,12 +136,22 @@ passkey-image-dapp/
 - [x] Deployed at `0xe8D3139f5fCEC2085Fcf01Dde99A3Ba53Ab1Ac18` (tx: `0x4727c858...d769b0`, block: 37,256,264)
 - [x] Fund the contract with RITUAL for executor fees (when needed)
 
-### Phase 5: Run Frontend (NEXT)
+### Phase 5: Activate Sovereign Agent (NEXT)
+
+**Windows (two-step — avoids vm.ffi hang):**
+- [ ] Read executor address from `cast call 0x9644e8562cE0Fe12b4deeC4163c064A8862Bf47F "getServicesByCapability(uint8,bool)((address,address,uint8,bytes,string,bytes32,uint8,bool,bytes32)[])" 0 true --rpc-url ritual`
+- [ ] Extract the publicKey hex (3rd field) and run: `node script\prepare-secret.cjs <publicKeyHex>` to generate `script/encrypted-secret.hex`
+- [ ] `forge script script\Activate.s.sol --rpc-url ritual --broadcast`
+
+**Non-Windows (single step, vm.ffi works):**
+- [ ] `forge script script/Activate.s.sol --rpc-url ritual --broadcast`
+
+### Phase 6: Run Frontend (NEXT)
 - [ ] Set `NEXT_PUBLIC_CONSUMER_ADDRESS=0xe8D3139f5fCEC2085Fcf01Dde99A3Ba53Ab1Ac18` in `frontend/.env`
 - [ ] `npm run dev` in `frontend/`
 - [ ] Open browser, create passkey, generate an image
 
-### Phase 6: E2E Verification (NEXT)
+### Phase 7: E2E Verification (NEXT)
 - [ ] Verify passkey registration works
 - [ ] Verify image request transaction submits correctly
 - [ ] Verify callback handler populates URI
@@ -164,6 +177,7 @@ passkey-image-dapp/
 - `forge build` stack-too-deep under `via_ir` → fixed by packing 18-arg `abi.encode` into a struct (`PrecompileInput`) + moving 9-value `abi.decode` into helper + making struct-returning public mappings private with explicit getters
 - `test_callbackError` reverting → fixed by using tuple decode (not struct decode) in `_decodeCallbackResponse` helper
 - `test_depositFees` reverting locally → fixed by `vm.etch` mock for RitualWallet precompile address
+- `vm.ffi` hangs on Windows when spawning Node.js child process → removed ffi from `Activate.s.sol`; replaced with two-step workflow: (1) run `prepare-secret.cjs` offline to encrypt secrets to a hex file, (2) forge script reads the file via `vm.readFile` + `vm.parseBytes`
 
 ## Environment Variables (.env)
 

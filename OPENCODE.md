@@ -149,6 +149,34 @@ The response data decodes as: `(bool hasError, bytes, string outputUri, bytes32 
 | ESLint: "next/core-web-vitals" not found | `eslint-config-next` not installed | `npm install --save-dev eslint-config-next@14` |
 | ESLint v10 incompatible with Next.js 14 | v10 uses flat config only, Next expects eslintrc | Downgraded to `eslint@^8` |
 
+## Persistent "Please install a web3 wallet" Message (UNRESOLVED)
+
+Despite the frontend codebase being fully cleaned of any wallet-detection checks, the "please install a web3 wallet" / "please connect a web3 wallet" message continues to appear on the live Vercel deployment after image generation is attempted.
+
+### Investigation so far
+
+1. **Exhaustive codebase search**: Zero references to `window.ethereum`, `custom(window`, `requestAddresses`, `"web3 wallet"`, `"MetaMask"`, or `"install.*wallet"` remain in any runtime code. Only `lib/global.d.ts` declares the `ethereum` type annotation (zero runtime effect, stripped at compile time).
+
+2. **Build output**: `next build` completes successfully — no compilation errors, no type errors related to wallet providers.
+
+3. **Deployment**: Vercel deployment was rebuilt with cache cleared. The API routes (`/api/submit-request`, `/api/owner-action`) show as `ƒ (Dynamic) server-rendered on demand` in the build output, confirming they exist on the server.
+
+4. **Passkey login works**: The user can successfully create/log in with a passkey. The `userAddress` state is set, and `PromptInput` renders.
+
+### Next debugging step
+
+The error is happening at **request-time** (not build-time). The user should:
+
+1. Open browser DevTools (F12) on the live site
+2. Go to the **Console** tab — look for any `alert()` message, uncaught error, or 500 response from the API
+3. Go to the **Network** tab — find the `POST /api/submit-request` call, inspect its **Response** tab
+4. The API route returns structured JSON errors. The actual error text will reveal whether:
+   - `PRIVATE_KEY` is not configured on the server (the API returns `"PRIVATE_KEY not configured on server"`)
+   - The RPC call itself is failing
+   - Some other runtime failure
+
+Since the frontend `submitRequest` flow now calls `fetch('/api/submit-request')`, any "install a web3 wallet" message the user sees must be coming from the server response or a browser-level wallet prompt, not from client-side code.
+
 ## TODO / Known Gaps
 
 1. **Executor selection**: Currently using `RITUAL_WALLET` as placeholder. Should query `TEEServiceRegistry` (0x9644e8562cE0Fe12b4deeC4163c064A8862Bf47F) for executors with capability 7 (IMAGE_CALL). See ritual-dapp-precompiles skill for registry ABI.
