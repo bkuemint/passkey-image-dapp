@@ -63,8 +63,9 @@ function buildSecrets(executorPublicKey: `0x${string}`): `0x${string}`[] {
   const secretsJson = JSON.stringify({
     HF_TOKEN: process.env.HF_TOKEN,
   });
-  const encryptedBuffer = encrypt(executorPublicKey.slice(2), Buffer.from(secretsJson));
-  return [`0x${encryptedBuffer.toString('hex')}` as `0x${string}`];
+  const encryptedBytes = encrypt(executorPublicKey.slice(2), Buffer.from(secretsJson));
+  const hex = [...new Uint8Array(encryptedBytes)].map(b => b.toString(16).padStart(2, '0')).join('');
+  return [`0x${hex}` as `0x${string}`];
 }
 
 export async function POST(req: NextRequest) {
